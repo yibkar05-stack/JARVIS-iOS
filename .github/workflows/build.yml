@@ -1,0 +1,33 @@
+name: Build unsigned JARVIS IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and compare two unsigned IPAs
+        shell: bash
+        run: |
+          bash scripts/build-unsigned.sh
+          cp dist/JARVIS-unsigned.ipa.sha256 "$RUNNER_TEMP/jarvis-first.sha256"
+          bash scripts/build-unsigned.sh
+          cmp "$RUNNER_TEMP/jarvis-first.sha256" dist/JARVIS-unsigned.ipa.sha256
+          cat dist/JARVIS-unsigned.ipa.sha256 >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JARVIS-unsigned
+          path: |
+            dist/JARVIS-unsigned.ipa
+            dist/JARVIS-unsigned.ipa.sha256
+          if-no-files-found: error
