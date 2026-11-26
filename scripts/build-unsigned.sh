@@ -19,7 +19,7 @@ xcrun --sdk iphoneos swiftc -sdk "$sdk" -target arm64-apple-ios15.0 \
     -Xlinker -no_adhoc_codesign -Xlinker -no_uuid \
     App/Agent.swift App/JarvisApp.swift -o "$app/JARVIS"
 
-xcrun lipo -verify_arch arm64 "$app/JARVIS"
+xcrun lipo "$app/JARVIS" -verify_arch arm64
 load_commands="$(xcrun otool -l "$app/JARVIS")"
 if grep -q 'LC_CODE_SIGNATURE' <<< "$load_commands"; then
     echo "El ejecutable contiene una firma" >&2
