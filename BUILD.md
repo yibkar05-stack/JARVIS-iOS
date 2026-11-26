@@ -32,30 +32,59 @@ ese artefacto, y ejecuta `shasum -a 256 -c JARVIS-unsigned.ipa.sha256` en la
 carpeta que contiene ambos archivos. La suma también figura en el resumen
 de la corrida. La prueba compara dos compilaciones en el mismo entorno.
 
-## Adaptador JDB-1 pendiente de cotejo
+## Perfil JDB-1 para el laboratorio
 
-El directorio de ejecución carecía de la especificación de Fase 2. El
-adaptador provisional vive en `App/Agent.swift`. Usa la URL base HTTPS
-introducida en la app. Envía `Authorization: Bearer <credencial>` y
-`X-Device-ID: JARVIS-IP8-001` a las rutas relativas `GET commands` y
-`POST results`. El GET acepta 204 o un objeto JSON con `command_id`,
-`command` e `issued_at` (ISO 8601). El POST envía `command_id`,
-`status` y `data`, y espera 2xx. Hay que cotejar rutas, autenticación,
-esquemas, respuestas y acuse idempotente con el contrato antes de conectar
-la app al gateway.
+Configura la raíz HTTPS del gateway y guarda por separado la credencial Bearer
+del dispositivo y una clave HMAC de desarrollo de 32 bytes en Base64. Ambos
+valores se ingresan manualmente y se guardan en Keychain con acceso solo al
+desbloquear el dispositivo. HMAC requiere un secreto compartido y el perfil usa
+exclusivamente una clave de laboratorio dedicada al gateway. Una firma con
+clave pública para el tramo al iPhone requiere un acuerdo de protocolo aparte.
 
-La pantalla permite configurar manualmente la URL y guardar la credencial
-del dispositivo en Keychain. El sondeo es optativo y se ejecuta en primer
-plano. El cliente admite `GET_STATUS`, `BATTERY` y `NETWORK`, verifica la
-vigencia de 120 segundos contra el reloj del dispositivo y guarda el
-resultado por URL e ID para reutilizarlo si vuelve a recibir la misma orden
-vigente. El gateway debe deduplicar la recepción de resultados por ID.
+El contrato de Fase 2 deja abiertas las rutas y el encuadre de la firma de la
+respuesta. Este cliente propone las siguientes convenciones para cotejo con
+MAUS y el gateway antes de la integración.
 
-## Estado de esta entrega
+- `GET /task` devuelve 204 si la cola está vacía o 200 con el objeto JDB-1,
+  `Content-Type: application/json` y las cinco cabeceras HMAC del contrato.
+  La firma cubre los bytes originales de la respuesta con el método y la ruta
+  de la consulta (`GET`, `/task`), el KEY_ID fijo `gateway-dev` y una ventana
+  de ±60 s. El cuerpo tiene un máximo de 512 bytes. El gateway conserva el
+  cuerpo byte por byte y genera un nonce nuevo para cada reentrega.
+- `POST /ack` envía `device_id`, `command_id` y `status: ACKED` antes de
+  ejecutar. `POST /result` envía `device_id`, `command_id`, `status` y
+  `data` después de guardar el resultado. Las tres consultas llevan Bearer
+  y `X-Device-ID`. El gateway debe aceptar con 2xx los ACK y RESULT repetidos
+  para el mismo dispositivo y comando.
+- El cliente solo ejecuta `GET_STATUS`, `GET_BATTERY` y `GET_NETWORK` con
+  `payload: {}` y `requires_approval: false`. Valida el UUID, el origen,
+  el destinatario y los segundos Unix de emisión y caducidad. Vuelve a
+  comprobar `expires_at` tras el ACK y antes de ejecutar. El sondeo funciona
+  en primer plano y duplica la espera de 5 s hasta un máximo de 60 s cuando
+  la cola está vacía o hay errores. Una entrega completada restablece 5 s.
+- El registro local guarda el nonce durante al menos 180 s y reserva de
+  forma atómica el UUID antes de la lectura de telemetría. Si se interrumpe
+  tras la reserva y antes de guardar el resultado, una reentrega vigente
+  devuelve `interrupted`. Los resultados guardados se reutilizan ante una
+  reentrega vigente idéntica. Los UUID anteriores al cambio, si aparecen en
+  el registro legado, se rechazan para evitar volver a ejecutar esas órdenes.
 
-La ejecución fue local en Windows. La búsqueda de `xcodebuild` y `swift`
-mediante `Get-Command` no devolvió ejecutables. La instrucción de ejecución
-local excluyó GitHub y cualquier servicio externo. Quedan pendientes la
-compilación en macOS, la prueba de reproducibilidad, la obtención del IPA
-y su SHA-256, y el cotejo con Fase 2. El estado de facturación de GitHub
-quedó sin verificar.
+### Aplazamiento de pinning TLS
+
+Para la PoC en LAN controlada se conserva HTTPS con la validación de
+certificado y nombre de host de iOS, y se rechazan todas las redirecciones.
+Esto permite probar el contrato de entrega mientras se acuerdan el certificado
+y su rotación, sin anclar un certificado temporal. El gateway de la PoC debe
+presentar un certificado que iOS ya considere de confianza para su nombre.
+El riesgo residual es que la sesión acepta cualquier cadena de confianza
+válida para ese nombre, por lo que HMAC protege la orden pero la exposición
+del Bearer sigue dependiendo de TLS. El aplazamiento se limita al laboratorio
+con credenciales de desarrollo.
+
+### Vectores locales
+
+Ejecuta `python verify_jdb1.py` desde la raíz del payload. El programa valida
+el V1 publicado y el flujo de entrega del perfil con un modelo Python y un
+reloj fijo. La compilación, la ejecución de Swift en iOS y la interoperabilidad
+con el gateway requieren las comprobaciones en macOS y en el laboratorio.
+

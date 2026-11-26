@@ -1,0 +1,16 @@
+Python 3.15.0 (Windows)
+Comando: python verify_jdb1.py
+Exit code: 0
+
+test_changed_body_with_same_command_id_conflicts (__main__.Vectors.test_changed_body_with_same_command_id_conflicts) ... ok
+test_duplicate_command_after_journal_reload (__main__.Vectors.test_duplicate_command_after_journal_reload) ... ok
+test_expired_at_boundary_rejected_with_fresh_signature (__main__.Vectors.test_expired_at_boundary_rejected_with_fresh_signature) ... ok
+test_invalid_signature_rejected (__main__.Vectors.test_invalid_signature_rejected) ... ok
+test_published_v1 (__main__.Vectors.test_published_v1) ... ok
+test_tampered_body_rejected (__main__.Vectors.test_tampered_body_rejected) ... ok
+test_valid_signature_executes (__main__.Vectors.test_valid_signature_executes) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.005s
+
+OK

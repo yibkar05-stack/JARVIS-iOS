@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 @main
@@ -14,6 +15,7 @@ struct StatusView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("gatewayURL") private var address = ""
     @State private var credential = ""
+    @State private var signingKey = ""
     @State private var credentialStatus = ""
     @State private var enabled = false
 
@@ -44,6 +46,24 @@ struct StatusView: View {
                         }
                     }
                     .disabled(enabled || credential.isEmpty)
+                    SecureField("Clave HMAC de laboratorio (Base64)", text: $signingKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .disabled(enabled)
+                    Button("Guardar clave de laboratorio") {
+                        defer { signingKey = "" }
+                        guard let key = Data(base64Encoded: signingKey), key.count == 32 else {
+                            credentialStatus = "La clave debe contener 32 bytes en Base64"
+                            return
+                        }
+                        do {
+                            try Credential.save(signingKey, service: Credential.signingService)
+                            credentialStatus = "Clave de laboratorio guardada en Keychain"
+                        } catch {
+                            credentialStatus = "Error al guardar la clave"
+                        }
+                    }
+                    .disabled(enabled || signingKey.isEmpty)
                     if !credentialStatus.isEmpty { Text(credentialStatus) }
                     Toggle("Sondear gateway", isOn: $enabled)
                         .disabled(address.isEmpty)
