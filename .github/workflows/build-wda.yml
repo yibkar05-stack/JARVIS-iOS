@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-wda:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout JARVIS-iOS (host repo)
         uses: actions/checkout@v4
@@ -20,13 +20,9 @@ jobs:
           ref: v10.5.4
           path: WebDriverAgent-src
 
-      - name: Select Xcode 15.x (sin Swift Testing)
+      - name: Xcode version
         run: |
-          set -euo pipefail
           ls -d /Applications/Xcode_*.app || true
-          XC=$(ls -d /Applications/Xcode_15*.app | sort -V | tail -n 1)
-          echo "Seleccionado: $XC"
-          sudo xcode-select -s "$XC/Contents/Developer"
           xcodebuild -version
 
       - name: Build WebDriverAgentRunner (unsigned, build-for-testing)
@@ -45,20 +41,39 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             | tee "$GITHUB_WORKSPACE/build/xcodebuild.log"
 
-      - name: Compatibility guard (iOS 16 — no Swift Testing interop)
+      - name: Strip embedded XCTest stack + compatibility guard (iOS 16)
         run: |
           set -euo pipefail
           APP_PATH=$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products" -name 'WebDriverAgentRunner-Runner.app' -type d | head -n 1)
           echo "Runner app: $APP_PATH"
-          echo "--- Frameworks in app ---"
+          echo "--- Frameworks ANTES del strip ---"
           ls "$APP_PATH/Frameworks" || true
-          echo "--- Runner linked libraries ---"
+          # Xcode >=16 incrusta en el runner una pila XCTest propia (Testing.framework
+          # exige lib_TestingInterop.dylib, inexistente en iOS 16.7 -> DYLD abort).
+          # Los builds de la era Xcode 15 NO incrustaban esa pila: el runner usa el
+          # XCTest del propio dispositivo (DDI). Se retira la pila incrustada para
+          # reproducir ese layout; WebDriverAgentLib.framework se CONSERVA.
+          for fw in Testing.framework XCTest.framework XCTestCore.framework XCTestSupport.framework XCUIAutomation.framework XCUnit.framework XCTAutomationSupport.framework libXCTestSwiftSupport.dylib; do
+            rm -rf "$APP_PATH/Frameworks/$fw"
+            find "$APP_PATH/PlugIns" -name "$fw" -exec rm -rf {} + 2>/dev/null || true
+          done
+          echo "--- Frameworks DESPUES del strip ---"
+          ls "$APP_PATH/Frameworks" || true
+          find "$APP_PATH/PlugIns" -type d -name Frameworks -exec ls {} \; || true
+          echo "--- Referencias de los binarios principales ---"
           otool -L "$APP_PATH/WebDriverAgentRunner-Runner" || true
+          XCTEST_BIN=$(find "$APP_PATH/PlugIns" -name 'WebDriverAgentRunner' -type f | head -n 1)
+          echo "xctest bin: $XCTEST_BIN"
+          otool -L "$XCTEST_BIN" || true
           if find "$APP_PATH" -name 'Testing.framework' -o -name 'lib_TestingInterop*' | grep -q .; then
-            echo "::error::Artefacto INCOMPATIBLE con iOS 16: contiene Testing.framework/lib_TestingInterop"
+            echo "::error::Sigue presente Testing.framework/lib_TestingInterop tras el strip"
             exit 1
           fi
-          echo "GUARD_OK: sin Testing.framework ni lib_TestingInterop"
+          if otool -L "$APP_PATH/WebDriverAgentRunner-Runner" | grep -qi 'TestingInterop'; then
+            echo "::error::El runner referencia lib_TestingInterop"
+            exit 1
+          fi
+          echo "GUARD_OK: pila XCTest incrustada retirada; sin referencias a TestingInterop"
 
       - name: Package IPA
         run: |
@@ -82,7 +97,7 @@ jobs:
           echo "IPA_SHA256=$SHA"
           {
             echo "## WebDriverAgentRunner.ipa (unsigned)"
-            echo "- WDA revision: v10.5.4 (appium/WebDriverAgent), Xcode 15.x en macos-14 (Xcode >=16 inyecta Testing.framework: verificado en la corrida 46048246392)"
+            echo "- WDA revision: v10.5.4 (appium/WebDriverAgent), macos-15/Xcode 16.4 con STRIP de la pila XCTest incrustada (layout era Xcode 15: XCTest del dispositivo via DDI)"
             echo "- size_bytes: $SIZE"
             echo "- sha256: $SHA"
           } >> "$GITHUB_STEP_SUMMARY"
