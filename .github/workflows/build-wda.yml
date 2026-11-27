@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-wda:
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - name: Checkout JARVIS-iOS (host repo)
         uses: actions/checkout@v4
@@ -20,8 +20,14 @@ jobs:
           ref: v10.5.4
           path: WebDriverAgent-src
 
-      - name: Xcode version
-        run: xcodebuild -version
+      - name: Select Xcode 15.x (sin Swift Testing)
+        run: |
+          set -euo pipefail
+          ls -d /Applications/Xcode_*.app || true
+          XC=$(ls -d /Applications/Xcode_15*.app | sort -V | tail -n 1)
+          echo "Seleccionado: $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
 
       - name: Build WebDriverAgentRunner (unsigned, build-for-testing)
         working-directory: WebDriverAgent-src
@@ -76,7 +82,7 @@ jobs:
           echo "IPA_SHA256=$SHA"
           {
             echo "## WebDriverAgentRunner.ipa (unsigned)"
-            echo "- WDA revision: v10.5.4 (appium/WebDriverAgent), Xcode 15 (macos-13)"
+            echo "- WDA revision: v10.5.4 (appium/WebDriverAgent), Xcode 15 (macos-14)"
             echo "- size_bytes: $SIZE"
             echo "- sha256: $SHA"
           } >> "$GITHUB_STEP_SUMMARY"
