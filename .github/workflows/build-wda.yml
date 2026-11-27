@@ -93,3 +93,5 @@ jobs:
           name: WebDriverAgentRunner-ipa
           path: WebDriverAgentRunner.ipa
           if-no-files-found: error
+
+# re-disparo 2026-11-27: corrida anterior cancelada al crearse; se reintenta
