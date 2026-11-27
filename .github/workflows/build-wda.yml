@@ -2,6 +2,9 @@ name: Build WebDriverAgent IPA (unsigned)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [tactil-wda]
+    paths: [.github/workflows/build-wda.yml]
 
 jobs:
   build-wda:
