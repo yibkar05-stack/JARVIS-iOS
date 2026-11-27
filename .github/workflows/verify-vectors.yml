@@ -31,12 +31,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Agent.swift bajo prueba == commit 0412cb5 (sin alterar el cliente real)
+      - name: Agent.swift bajo prueba == commit dc04e99 (sin alterar el cliente real)
         shell: bash
         run: |
-          git cat-file -e 0412cb5 || { echo "commit 0412cb5 ausente del historial"; exit 1; }
-          git diff --quiet 0412cb5 HEAD -- App/Agent.swift \
-            || { echo "App/Agent.swift difiere de 0412cb5"; git diff --stat 0412cb5 HEAD -- App/Agent.swift; exit 1; }
+          git cat-file -e dc04e99 || { echo "commit dc04e99 ausente del historial"; exit 1; }
+          git diff --quiet dc04e99 HEAD -- App/Agent.swift \
+            || { echo "App/Agent.swift difiere de dc04e99"; git diff --stat dc04e99 HEAD -- App/Agent.swift; exit 1; }
       - name: Typecheck del cliente completo (Agent + JarvisApp) para iOS Simulator
         shell: bash
         run: |
