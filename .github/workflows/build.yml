@@ -2,7 +2,7 @@ name: Build unsigned JARVIS IPA
 
 on:
   push:
-    branches: [main]
+    branches: [main, build-003]
   workflow_dispatch:
 
 permissions:

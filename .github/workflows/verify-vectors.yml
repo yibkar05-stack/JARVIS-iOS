@@ -1,6 +1,12 @@
 name: Verify Ed25519 vectors (Swift)
 
 on:
+  push:
+    branches: [build-003]
+    paths:
+      - 'vectors/**'
+      - 'App/Agent.swift'
+      - '.github/workflows/verify-vectors.yml'
   workflow_dispatch:
 
 permissions:
