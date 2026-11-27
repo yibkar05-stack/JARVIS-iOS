@@ -1,0 +1,70 @@
+name: Build WebDriverAgent IPA (unsigned)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-wda:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout JARVIS-iOS (host repo)
+        uses: actions/checkout@v4
+
+      - name: Checkout appium/WebDriverAgent v16.15.3
+        uses: actions/checkout@v4
+        with:
+          repository: appium/WebDriverAgent
+          ref: v16.15.3
+          path: WebDriverAgent-src
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Build WebDriverAgentRunner (unsigned, build-for-testing)
+        working-directory: WebDriverAgent-src
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee "$GITHUB_WORKSPACE/build/xcodebuild.log"
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products" -name 'WebDriverAgentRunner-Runner.app' -type d | head -n 1)
+          echo "Runner app: $APP_PATH"
+          test -n "$APP_PATH"
+          rm -rf "$GITHUB_WORKSPACE/staging"
+          mkdir -p "$GITHUB_WORKSPACE/staging/Payload"
+          cp -R "$APP_PATH" "$GITHUB_WORKSPACE/staging/Payload/"
+          cd "$GITHUB_WORKSPACE/staging"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/WebDriverAgentRunner.ipa" Payload
+          ls -l "$GITHUB_WORKSPACE/WebDriverAgentRunner.ipa"
+
+      - name: IPA size and SHA-256
+        run: |
+          set -euo pipefail
+          SIZE=$(stat -f%z "$GITHUB_WORKSPACE/WebDriverAgentRunner.ipa")
+          SHA=$(shasum -a 256 "$GITHUB_WORKSPACE/WebDriverAgentRunner.ipa" | awk '{print $1}')
+          echo "IPA_SIZE_BYTES=$SIZE"
+          echo "IPA_SHA256=$SHA"
+          {
+            echo "## WebDriverAgentRunner.ipa (unsigned)"
+            echo "- WDA revision: v16.15.3 (appium/WebDriverAgent)"
+            echo "- size_bytes: $SIZE"
+            echo "- sha256: $SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgentRunner-ipa
+          path: WebDriverAgentRunner.ipa
+          if-no-files-found: error
