@@ -16,5 +16,6 @@
     <key>LSRequiresIPhoneOS</key><true/>
     <key>UIDeviceFamily</key><array><integer>1</integer></array>
     <key>UILaunchScreen</key><dict/>
+    <key>NSLocalNetworkUsageDescription</key><string>JARVIS se conecta al gateway del laboratorio en tu red local para recibir y confirmar comandos.</string>
 </dict>
 </plist>
