@@ -226,7 +226,7 @@ final class Agent: ObservableObject {
             guard let credential = try Credential.load(),
                   let encodedKey = try Credential.load(service: Credential.signingService),
                   let key = Data(base64Encoded: encodedKey), key.count == 32 else {
-                status = "Configura la credencial y la clave p?blica Ed25519"
+                status = "Configura la credencial y la clave pública Ed25519"
                 return
             }
             let gateway = try Gateway(address: address, credential: credential,
