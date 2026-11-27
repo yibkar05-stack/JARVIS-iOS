@@ -8,16 +8,16 @@ on:
 
 jobs:
   build-wda:
-    runs-on: macos-latest
+    runs-on: macos-13
     steps:
       - name: Checkout JARVIS-iOS (host repo)
         uses: actions/checkout@v4
 
-      - name: Checkout appium/WebDriverAgent v16.15.3
+      - name: Checkout appium/WebDriverAgent v10.5.4
         uses: actions/checkout@v4
         with:
           repository: appium/WebDriverAgent
-          ref: v16.15.3
+          ref: v10.5.4
           path: WebDriverAgent-src
 
       - name: Xcode version
@@ -38,6 +38,21 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             | tee "$GITHUB_WORKSPACE/build/xcodebuild.log"
+
+      - name: Compatibility guard (iOS 16 — no Swift Testing interop)
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products" -name 'WebDriverAgentRunner-Runner.app' -type d | head -n 1)
+          echo "Runner app: $APP_PATH"
+          echo "--- Frameworks in app ---"
+          ls "$APP_PATH/Frameworks" || true
+          echo "--- Runner linked libraries ---"
+          otool -L "$APP_PATH/WebDriverAgentRunner-Runner" || true
+          if find "$APP_PATH" -name 'Testing.framework' -o -name 'lib_TestingInterop*' | grep -q .; then
+            echo "::error::Artefacto INCOMPATIBLE con iOS 16: contiene Testing.framework/lib_TestingInterop"
+            exit 1
+          fi
+          echo "GUARD_OK: sin Testing.framework ni lib_TestingInterop"
 
       - name: Package IPA
         run: |
@@ -61,7 +76,7 @@ jobs:
           echo "IPA_SHA256=$SHA"
           {
             echo "## WebDriverAgentRunner.ipa (unsigned)"
-            echo "- WDA revision: v16.15.3 (appium/WebDriverAgent)"
+            echo "- WDA revision: v10.5.4 (appium/WebDriverAgent), Xcode 15 (macos-13)"
             echo "- size_bytes: $SIZE"
             echo "- sha256: $SHA"
           } >> "$GITHUB_STEP_SUMMARY"
