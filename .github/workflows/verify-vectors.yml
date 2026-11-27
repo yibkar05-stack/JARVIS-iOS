@@ -1,17 +1,15 @@
 name: Verify Ed25519 vectors (Swift)
-
 on:
   push:
     branches: [build-003]
     paths:
       - 'vectors/**'
-      - 'App/Agent.swift'
+      - 'App/**'
+      - 'Tests/**'
       - '.github/workflows/verify-vectors.yml'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   verify:
     runs-on: macos-15
@@ -24,3 +22,68 @@ jobs:
         shell: bash
         run: |
           python3 vectors/verify_swift_vectors.py
+  client-tests:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Agent.swift bajo prueba == commit 0412cb5 (sin alterar el cliente real)
+        shell: bash
+        run: |
+          git cat-file -e 0412cb5 || { echo "commit 0412cb5 ausente del historial"; exit 1; }
+          git diff --quiet 0412cb5 HEAD -- App/Agent.swift \
+            || { echo "App/Agent.swift difiere de 0412cb5"; git diff --stat 0412cb5 HEAD -- App/Agent.swift; exit 1; }
+      - name: Typecheck del cliente completo (Agent + JarvisApp) para iOS Simulator
+        shell: bash
+        run: |
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          swiftc -typecheck -parse-as-library -swift-version 5 -sdk "$SDK" \
+            -target arm64-apple-ios17.0-simulator App/Agent.swift App/JarvisApp.swift
+      - name: L-01 — aserciones de código fuente
+        shell: bash
+        run: |
+          grep -q '@AppStorage("pollingEnabled") private var enabled = false' App/JarvisApp.swift
+          ! grep -q '@State private var enabled' App/JarvisApp.swift
+          grep -q '.task(id: enabled && foreground)' App/JarvisApp.swift
+          echo "L-01 fuente OK (el comportamiento en UI NO se prueba aquí)"
+      - name: Compilar y ejecutar arnés contra Agent.swift real (iOS Simulator)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          swiftc -swift-version 5 -sdk "$SDK" -target arm64-apple-ios17.0-simulator \
+            App/Agent.swift Tests/ClientTests/main.swift -o build/client-tests \
+            -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __entitlements \
+            -Xlinker Tests/ClientTests/harness.entitlements
+          UDID=$(python3 - <<'PY'
+          import json, subprocess
+          d = json.loads(subprocess.check_output(["xcrun","simctl","list","devices","available","-j"]))
+          c = [x for rt, l in d["devices"].items() if "iOS" in rt for x in l if x["name"].startswith("iPhone")]
+          print(c[-1]["udid"])
+          PY
+          )
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          set +e
+          xcrun simctl spawn "$UDID" "$PWD/build/client-tests" 2>&1 | tee build/client-tests.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          { echo '```'; cat build/client-tests.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $RC
+      - name: SHA-256 de archivos
+        if: always()
+        shell: bash
+        run: |
+          shasum -a 256 App/Agent.swift App/JarvisApp.swift Tests/ClientTests/main.swift \
+            Tests/ClientTests/harness.entitlements .github/workflows/verify-vectors.yml | tee build/sha256.txt
+          git rev-parse HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-tests-log
+          path: build/
