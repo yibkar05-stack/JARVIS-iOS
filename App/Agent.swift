@@ -12,7 +12,7 @@ enum AgentError: Error {
 enum Credential {
     static let device = "JARVIS-IP8-001"
     static let bearerService = "com.jarvis.device-agent.gateway"
-    static let signingService = "com.jarvis.device-agent.gateway-lab-signing"
+    static let signingService = "com.jarvis.device-agent.gateway-ed25519-public"
 
     static func query(_ service: String) -> [String: Any] { [
         kSecClass as String: kSecClassGenericPassword,
@@ -59,15 +59,26 @@ struct Command: Decodable {
     let requires_approval: Bool
     let payload: [String: String]
 
-    func validate(at now: TimeInterval) throws {
+    func validate(at now: TimeInterval, allowExpired: Bool = false) throws {
         guard self.protocol == "JDB-1", device_id == Credential.device,
               let id = UUID(uuidString: command_id),
               id.uuidString.lowercased() == command_id.lowercased(),
               ["maus", "alpha", "beta", "codex"].contains(origin),
-              ["GET_STATUS", "GET_BATTERY", "GET_NETWORK"].contains(capability),
-              !requires_approval, payload.isEmpty,
+              !requires_approval,
               issued_at > 0, expires_at > issued_at, expires_at - issued_at <= 120,
-              Double(issued_at) <= now, now < Double(expires_at) else {
+              Double(issued_at) <= now, allowExpired || now < Double(expires_at) else {
+            throw AgentError.invalidCommand
+        }
+        switch capability {
+        case "GET_STATUS", "GET_BATTERY", "GET_NETWORK":
+            guard payload.isEmpty else { throw AgentError.invalidCommand }
+        case "SAVE_NOTE":
+            guard origin != "codex", payload.count == 1, let text = payload["text"],
+                  (1...500).contains(text.unicodeScalars.count),
+                  !text.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n")).isEmpty else {
+                throw AgentError.invalidCommand
+            }
+        default:
             throw AgentError.invalidCommand
         }
     }
@@ -86,39 +97,27 @@ struct CommandAck: Encodable {
     let status = "ACKED"
 }
 
+enum DeliverySignature {
+    static func verifies(_ signature: String, body: Data,
+                         key: Curve25519.Signing.PublicKey) -> Bool {
+        guard let bytes = Data(base64Encoded: signature), bytes.count == 64,
+              bytes.base64EncodedString() == signature else { return false }
+        var signedBytes = Data("JDB-1\n".utf8)
+        signedBytes.append(body)
+        return key.isValidSignature(bytes, for: signedBytes)
+    }
+}
+
 struct SignedDelivery {
-    static let keyID = "gateway-dev"
     let body: Data
-    let nonce: String
 
-    init(body: Data, response: HTTPURLResponse, key: SymmetricKey, now: TimeInterval) throws {
-        func header(_ name: String) -> String { response.value(forHTTPHeaderField: name) ?? "" }
-        let keyID = header("X-Jarvis-Key-Id")
-        let timestamp = header("X-Jarvis-Timestamp")
-        let nonce = header("X-Jarvis-Nonce")
-        let requestID = header("X-Jarvis-Request-Id")
-        let signature = header("X-Jarvis-Signature")
-        guard keyID == Self.keyID,
-              let epoch = Int64(timestamp), epoch > 0, String(epoch) == timestamp,
-              abs(now - Double(epoch)) <= 60,
-              nonce.range(of: #"\A[a-f0-9]{32}\z"#, options: .regularExpression) != nil,
-              requestID.range(of: #"\A[a-f0-9]{32}\z"#, options: .regularExpression) != nil,
-              signature.range(of: #"\A[A-Za-z0-9_-]{43}\z"#, options: .regularExpression) != nil,
-              let tag = Data(base64Encoded: signature.replacingOccurrences(of: "-", with: "+")
-                  .replacingOccurrences(of: "_", with: "/") + "="),
-              tag.base64EncodedString().replacingOccurrences(of: "+", with: "-")
-                  .replacingOccurrences(of: "/", with: "_").dropLast() == signature[...],
-              header("Content-Type").lowercased() == "application/json",
-              body.count <= 512 else { throw AgentError.invalidCommand }
-
-        let canonical = ["JARVIS-HMAC-V1", keyID, timestamp, nonce, requestID,
-                         "GET", "/task", Self.digest(body)].joined(separator: "\n")
-        guard HMAC<SHA256>.isValidAuthenticationCode(tag, authenticating: Data(canonical.utf8),
-                                                      using: key) else {
+    init(body: Data, response: HTTPURLResponse, key: Curve25519.Signing.PublicKey) throws {
+        guard let signature = response.value(forHTTPHeaderField: "X-Jarvis-Ed25519"),
+              response.value(forHTTPHeaderField: "Content-Type")?.lowercased() == "application/json",
+              DeliverySignature.verifies(signature, body: body, key: key) else {
             throw AgentError.invalidCommand
         }
         self.body = body
-        self.nonce = nonce
     }
 
     static func digest(_ body: Data) -> String {
@@ -138,11 +137,11 @@ final class RejectRedirect: NSObject, URLSessionTaskDelegate {
 struct Gateway {
     let base: URL
     let credential: String
-    let signingKey: SymmetricKey
+    let signingKey: Curve25519.Signing.PublicKey
     private static let session = URLSession(configuration: .ephemeral,
                                             delegate: RejectRedirect(), delegateQueue: nil)
 
-    init(address: String, credential: String, signingKey: SymmetricKey) throws {
+    init(address: String, credential: String, signingKey: Curve25519.Signing.PublicKey) throws {
         guard let parts = URLComponents(string: address), parts.scheme == "https",
               let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
               parts.query == nil, parts.fragment == nil,
@@ -169,11 +168,10 @@ struct Gateway {
         case 200:
             var data = Data()
             for try await byte in bytes {
-                guard data.count < 512 else { throw AgentError.invalidCommand }
+                guard data.count < 8192 else { throw AgentError.invalidCommand }
                 data.append(byte)
             }
-            return try SignedDelivery(body: data, response: response, key: signingKey,
-                                      now: Date().timeIntervalSince1970)
+            return try SignedDelivery(body: data, response: response, key: signingKey)
         default: throw AgentError.response
         }
     }
@@ -192,10 +190,10 @@ struct Gateway {
 struct CachedResult: Codable {
     let fingerprint: String
     var result: CommandResult?
+    var pendingUpload: Bool? = nil
 }
 
 struct DeliveryJournal: Codable {
-    var nonces: [String: TimeInterval] = [:]
     var commands: [String: CachedResult] = [:]
 
     func save(to url: URL) throws {
@@ -228,11 +226,11 @@ final class Agent: ObservableObject {
             guard let credential = try Credential.load(),
                   let encodedKey = try Credential.load(service: Credential.signingService),
                   let key = Data(base64Encoded: encodedKey), key.count == 32 else {
-                status = "Configura la credencial y la clave de laboratorio"
+                status = "Configura la credencial y la clave p?blica Ed25519"
                 return
             }
             let gateway = try Gateway(address: address, credential: credential,
-                                      signingKey: SymmetricKey(data: key))
+                                      signingKey: Curve25519.Signing.PublicKey(rawRepresentation: key))
             let store = try FileManager.default.url(for: .applicationSupportDirectory,
                                                      in: .userDomainMask,
                                                      appropriateFor: nil, create: true)
@@ -252,20 +250,18 @@ final class Agent: ObservableObject {
             var delay: UInt64 = 5
             while !Task.isCancelled {
                 do {
-                    if let delivery = try await gateway.poll() {
-                        try Task.checkCancellation()
-                        let now = Date().timeIntervalSince1970
-                        guard journal.nonces[delivery.nonce].map({ $0 <= now }) ?? true else {
-                            throw AgentError.invalidCommand
-                        }
+                    for (id, entry) in journal.commands where entry.pendingUpload == true {
+                        guard let result = entry.result else { throw AgentError.response }
+                        try await gateway.submit(result, to: "result")
                         var updated = journal
-                        updated.nonces = journal.nonces.filter { $0.value > now }
-                        updated.nonces[delivery.nonce] = now + 180
+                        updated.commands[id]?.pendingUpload = false
                         try updated.save(to: store)
                         journal = updated
-
+                    }
+                    if let delivery = try await gateway.poll() {
+                        try Task.checkCancellation()
                         let command = try JSONDecoder().decode(Command.self, from: delivery.body)
-                        try command.validate(at: Date().timeIntervalSince1970)
+                        try command.validate(at: Date().timeIntervalSince1970, allowExpired: true)
                         let id = command.command_id.lowercased()
                         guard !legacyIDs.contains(id) else { throw AgentError.invalidCommand }
                         let fingerprint = SignedDelivery.digest(delivery.body)
@@ -275,23 +271,31 @@ final class Agent: ObservableObject {
                         }
                         try await gateway.submit(CommandAck(device_id: Credential.device,
                                                             command_id: command.command_id), to: "ack")
-                        try Task.checkCancellation()
-                        try command.validate(at: Date().timeIntervalSince1970)
+                        var updated = journal
                         let result: CommandResult
                         if let previous = previous {
                             result = previous.result ?? CommandResult(device_id: Credential.device,
                                 command_id: command.command_id, status: "interrupted", data: [:])
                         } else {
+                            try Task.checkCancellation()
                             updated.commands[id] = CachedResult(fingerprint: fingerprint, result: nil)
                             try updated.save(to: store)
                             journal = updated
-                            try command.validate(at: Date().timeIntervalSince1970)
-                            result = execute(command)
-                            updated.commands[id]?.result = result
-                            try updated.save(to: store)
-                            journal = updated
+                            if Date().timeIntervalSince1970 < Double(command.expires_at) {
+                                result = execute(command, in: store.deletingLastPathComponent())
+                            } else {
+                                result = CommandResult(device_id: Credential.device,
+                                    command_id: command.command_id, status: "interrupted", data: [:])
+                            }
                         }
+                        updated.commands[id]?.result = result
+                        updated.commands[id]?.pendingUpload = true
+                        try updated.save(to: store)
+                        journal = updated
                         try await gateway.submit(result, to: "result")
+                        updated.commands[id]?.pendingUpload = false
+                        try updated.save(to: store)
+                        journal = updated
                         delay = 5
                     } else {
                         delay = min(delay * 2, 60)
@@ -309,7 +313,7 @@ final class Agent: ObservableObject {
         }
     }
 
-    private func execute(_ command: Command) -> CommandResult {
+    private func execute(_ command: Command, in directory: URL) -> CommandResult {
         let data: [String: String]
         switch command.capability {
         case "GET_STATUS":
@@ -322,9 +326,19 @@ final class Agent: ObservableObject {
             let interfaces = path.availableInterfaces.filter { path.usesInterfaceType($0.type) }
             data = ["state": path.status == .satisfied ? "available" : "unavailable",
                     "interfaces": interfaces.map(\.name).joined(separator: ",")]
+        case "SAVE_NOTE":
+            let file = directory.appendingPathComponent("Note-" + command.command_id.lowercased() + ".txt")
+            do {
+                guard let text = command.payload["text"] else { throw AgentError.invalidCommand }
+                try Data(text.utf8).write(to: file, options: .atomic)
+                data = ["note_id": command.command_id]
+            } catch {
+                return CommandResult(device_id: Credential.device, command_id: command.command_id,
+                                     status: "error", data: [:])
+            }
         default:
             return CommandResult(device_id: Credential.device, command_id: command.command_id,
-                                 status: "unsupported", data: [:])
+                                 status: "error", data: [:])
         }
         return CommandResult(device_id: Credential.device, command_id: command.command_id,
                              status: "ok", data: data)

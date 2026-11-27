@@ -1,0 +1,20 @@
+name: Verify Ed25519 vectors (Swift)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run CryptoKit verifier against shared vectors
+        shell: bash
+        run: |
+          python3 vectors/verify_swift_vectors.py

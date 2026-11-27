@@ -46,11 +46,11 @@ struct StatusView: View {
                         }
                     }
                     .disabled(enabled || credential.isEmpty)
-                    SecureField("Clave HMAC de laboratorio (Base64)", text: $signingKey)
+                    TextField("Ed25519 public key (Base64)", text: $signingKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .disabled(enabled)
-                    Button("Guardar clave de laboratorio") {
+                    Button("Guardar clave p?blica") {
                         defer { signingKey = "" }
                         guard let key = Data(base64Encoded: signingKey), key.count == 32 else {
                             credentialStatus = "La clave debe contener 32 bytes en Base64"
@@ -58,7 +58,7 @@ struct StatusView: View {
                         }
                         do {
                             try Credential.save(signingKey, service: Credential.signingService)
-                            credentialStatus = "Clave de laboratorio guardada en Keychain"
+                            credentialStatus = "Clave p?blica guardada en Keychain"
                         } catch {
                             credentialStatus = "Error al guardar la clave"
                         }
