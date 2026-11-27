@@ -27,6 +27,7 @@ jobs:
         working-directory: WebDriverAgent-src
         run: |
           set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/build"
           xcodebuild build-for-testing \
             -project WebDriverAgent.xcodeproj \
             -scheme WebDriverAgentRunner \
